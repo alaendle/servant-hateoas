@@ -31,19 +31,22 @@ instance Resource res => ToResource res (With UserRefs User) where
   toResource _ ct w@(With (UserRefs uid aid _ _) _) = addRel ("self", mkSelfLink uid)
                         . addRel ("address", mkAddrLink aid)
                         . addRel ("friends", mkFriendsLink uid)
+                        . addRel ("close-friends", mkCloseFriendsLink uid)
                         $ wrap w
     where
       mkAddrLink = toRelationLink $ resourcifyProxy (Proxy @AddressGetOne) ct
       mkSelfLink = toRelationLink $ resourcifyProxy (Proxy @UserGetOne) ct
       mkFriendsLink = toRelationLink $ resourcifyProxy (Proxy @UserGetFriends) ct
+      mkCloseFriendsLink = toRelationLink $ resourcifyProxy (Proxy @UserGetCloseFriends) ct
 
 type Api = UserApi :<|> AddressApi
 
-type UserApi = UserGetOne :<|> UserGetAll :<|> UserGetQuery :<|> UserGetFriends
+type UserApi = UserGetOne :<|> UserGetAll :<|> UserGetQuery :<|> UserGetFriends :<|> UserGetCloseFriends
 type UserGetOne     = "api" :> "user" :> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] (With UserRefs User)
 type UserGetAll     = "api" :> "user" :> Get '[JSON] [With UserRefs User]
 type UserGetQuery   = "api" :> "user" :> "query" :> QueryParam "name" String :> QueryParam "income" Double :>Get '[JSON] (With UserRefs User)
 type UserGetFriends = "api" :> "user" :> Capture "id" Int :> "friends" :> Get '[JSON] [With UserRefs User]
+type UserGetCloseFriends = "api" :> "user" :> Capture "id" Int :> "close-friends" :> Get '[JSON] [With UserRefs User]
 
 type AddressApi = AddressGetOne
 type AddressGetOne = "api" :> "address" :> Capture "id" Int :> Get '[JSON] Address
@@ -75,7 +78,12 @@ instance Monad m => HasHandler m AddressGetOne where
 instance Monad m => HasHandler m UserGetFriends where
   getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _ _) _) -> uid == uId) userDb of
     (With (UserRefs _ _ friends _) _ : _) -> filter (\(With (UserRefs uid _ _ _) _) -> uid `elem` friends) userDb
-    _                                   -> error "User not found"
+    _                                     -> error "User not found"
+
+instance Monad m => HasHandler m UserGetCloseFriends where
+  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _ _) _) -> uid == uId) userDb of
+    (With (UserRefs _ _ _ closeFriends) _ : _) -> filter (\(With (UserRefs uid _ _ _) _) -> uid `elem` closeFriends) userDb
+    _                                          -> error "User not found"
 
 layerServer :: Server (Resourcify (MkLayers Api) (HAL JSON))
 layerServer = getResourceServer (Proxy @Handler) (Proxy @(HAL JSON)) (Proxy @(MkLayers Api))
