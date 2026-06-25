@@ -15,7 +15,9 @@ data With rel a = With { related :: rel, value :: a }
 instance ToJSON a => ToJSON (With rel a) where
   toJSON = toJSON . value
 
-data UserRefs = UserRefs { selfId :: Int, addressRef :: Int, friends :: [Int] }
+data UserRefs = UserRefs { selfId :: Int, addressRef :: Int, friends :: [Int], closeFriends :: [Int] }
+  deriving stock (Generic, Show, Eq, Ord)
+  deriving anyclass (ToJSON)
 
 data User = User { name :: String, income :: Double }
   deriving stock (Generic, Show, Eq, Ord)
@@ -26,7 +28,7 @@ data Address = Address { street :: String, city :: String }
   deriving anyclass (ToJSON, ToResource res)
 
 instance Resource res => ToResource res (With UserRefs User) where
-  toResource _ ct w@(With (UserRefs uid aid _) _) = addRel ("self", mkSelfLink uid)
+  toResource _ ct w@(With (UserRefs uid aid _ _) _) = addRel ("self", mkSelfLink uid)
                         . addRel ("address", mkAddrLink aid)
                         . addRel ("friends", mkFriendsLink uid)
                         $ wrap w
@@ -47,13 +49,13 @@ type AddressApi = AddressGetOne
 type AddressGetOne = "api" :> "address" :> Capture "id" Int :> Get '[JSON] Address
 
 userDb :: [With UserRefs User]
-userDb = [ With (UserRefs 1 1 [2, 3]) (User "Alice" 1000)
-         , With (UserRefs 2 2 [1, 3]) (User "Bob" 2000)
-         , With (UserRefs 3 2 [1, 2]) (User "Charlie" 3000)
+userDb = [ With (UserRefs 1 1 [2, 3] [2]) (User "Alice" 1000)
+         , With (UserRefs 2 2 [1, 3] [1]) (User "Bob" 2000)
+         , With (UserRefs 3 2 [1, 2] [1]) (User "Charlie" 3000)
          ]
 
 instance Monad m => HasHandler m UserGetOne where
-  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _) _) -> uid == uId) userDb of
+  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _ _) _) -> uid == uId) userDb of
     (user:_) -> user
     _        -> error "User not found"
 
@@ -71,8 +73,8 @@ instance Monad m => HasHandler m AddressGetOne where
   getHandler _ _ _ = error "Address not found"
 
 instance Monad m => HasHandler m UserGetFriends where
-  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _) _) -> uid == uId) userDb of
-    (With (UserRefs _ _ friends) _ : _) -> filter (\(With (UserRefs uid _ _) _) -> uid `elem` friends) userDb
+  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _ _) _) -> uid == uId) userDb of
+    (With (UserRefs _ _ friends _) _ : _) -> filter (\(With (UserRefs uid _ _ _) _) -> uid `elem` friends) userDb
     _                                   -> error "User not found"
 
 layerServer :: Server (Resourcify (MkLayers Api) (HAL JSON))
