@@ -3,24 +3,33 @@
 
 module Servant.Hateoas.Example where
 
-import           Data.Aeson      (ToJSON)
+import           Data.Aeson      (ToJSON (..))
 import           GHC.Generics
 import           Servant
 import           Servant.Hateoas
 
-data User = User { usrId :: Int, addressId :: Int, income :: Double, friends :: [Int] }
+-- A reusable "key beside value" wrapper, à la persistent's Entity.
+data With rel a = With { related :: rel, value :: a }
+
+-- Serialize only the value; the relation key is internal.
+instance ToJSON a => ToJSON (With rel a) where
+  toJSON = toJSON . value
+
+data UserRefs = UserRefs { selfId :: Int, addressRef :: Int, friends :: [Int] }
+
+data User = User { name :: String, income :: Double }
   deriving stock (Generic, Show, Eq, Ord)
   deriving anyclass (ToJSON)
 
-data Address = Address { addrId :: Int, street :: String, city :: String }
+data Address = Address { street :: String, city :: String }
   deriving stock (Generic, Show, Eq, Ord)
   deriving anyclass (ToJSON, ToResource res)
 
-instance Resource res => ToResource res User where
-  toResource _ ct usr = addRel ("self", mkSelfLink $ usrId usr)
-                        . addRel ("address", mkAddrLink $ addressId usr)
-                        . addRel ("friends", mkFriendsLink $ usrId usr)
-                        $ wrap usr
+instance Resource res => ToResource res (With UserRefs User) where
+  toResource _ ct w@(With (UserRefs uid aid _) _) = addRel ("self", mkSelfLink uid)
+                        . addRel ("address", mkAddrLink aid)
+                        . addRel ("friends", mkFriendsLink uid)
+                        $ wrap w
     where
       mkAddrLink = toRelationLink $ resourcifyProxy (Proxy @AddressGetOne) ct
       mkSelfLink = toRelationLink $ resourcifyProxy (Proxy @UserGetOne) ct
@@ -29,28 +38,42 @@ instance Resource res => ToResource res User where
 type Api = UserApi :<|> AddressApi
 
 type UserApi = UserGetOne :<|> UserGetAll :<|> UserGetQuery :<|> UserGetFriends
-type UserGetOne     = "api" :> "user" :> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] User
-type UserGetAll     = "api" :> "user" :> Get '[JSON] [User]
-type UserGetQuery   = "api" :> "user" :> "query" :> QueryParam "addrId" Int :> QueryParam "income" Double :> Get '[JSON] User
-type UserGetFriends = "api" :> "user" :> Capture "id" Int :> "friends" :> Get '[JSON] [User]
+type UserGetOne     = "api" :> "user" :> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] (With UserRefs User)
+type UserGetAll     = "api" :> "user" :> Get '[JSON] [With UserRefs User]
+type UserGetQuery   = "api" :> "user" :> "query" :> QueryParam "name" String :> QueryParam "income" Double :>Get '[JSON] (With UserRefs User)
+type UserGetFriends = "api" :> "user" :> Capture "id" Int :> "friends" :> Get '[JSON] [With UserRefs User]
 
 type AddressApi = AddressGetOne
 type AddressGetOne = "api" :> "address" :> Capture "id" Int :> Get '[JSON] Address
 
+userDb :: [With UserRefs User]
+userDb = [ With (UserRefs 1 1 [2, 3]) (User "Alice" 1000)
+         , With (UserRefs 2 2 [1, 3]) (User "Bob" 2000)
+         , With (UserRefs 3 2 [1, 2]) (User "Charlie" 3000)
+         ]
+
 instance Monad m => HasHandler m UserGetOne where
-  getHandler _ _ = \uId -> return $ User uId 0 0 []
+  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _) _) -> uid == uId) userDb of
+    (user:_) -> user
+    _        -> error "User not found"
 
 instance Monad m => HasHandler m UserGetAll where
-  getHandler _ _ = return [User 1 1 1000 [2,3], User 2 2 2000 [], User 3 3 3000 []]
+  getHandler _ _ = return userDb
 
 instance Monad m => HasHandler m UserGetQuery where
-  getHandler _ _ = \mAddrId mIncome -> return $ User 3 (maybe 0 id mAddrId) (maybe 0 id mIncome) []
+  getHandler _ _ = \mName mIncome -> return $ case filter (\(With _ (User n i)) -> maybe True (== n) mName && maybe True (== i) mIncome) userDb of
+      (user:_) -> user
+      _        -> error "User not found"
 
 instance Monad m => HasHandler m AddressGetOne where
-  getHandler _ _ = \aId -> return $ Address aId "Foo St" "BarBaz"
+  getHandler _ _ 1 = pure (Address "123 Main St" "Anytown")
+  getHandler _ _ 2 = pure (Address "456 Elm St" "Othertown")
+  getHandler _ _ _ = error "Address not found"
 
 instance Monad m => HasHandler m UserGetFriends where
-  getHandler _ _ = \uId -> return [User 1 1 1000 [2,3], User 2 2 2000 [], User 3 3 3000 []]
+  getHandler _ _ = \uId -> return $ case filter (\(With (UserRefs uid _ _) _) -> uid == uId) userDb of
+    (With (UserRefs _ _ friends) _ : _) -> filter (\(With (UserRefs uid _ _) _) -> uid `elem` friends) userDb
+    _                                   -> error "User not found"
 
 layerServer :: Server (Resourcify (MkLayers Api) (HAL JSON))
 layerServer = getResourceServer (Proxy @Handler) (Proxy @(HAL JSON)) (Proxy @(MkLayers Api))
