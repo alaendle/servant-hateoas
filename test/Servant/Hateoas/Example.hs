@@ -3,10 +3,23 @@
 
 module Servant.Hateoas.Example where
 
-import           Data.Aeson      (ToJSON (..))
+import           Data.Aeson      (ToJSON (..), Value (Array))
 import           GHC.Generics
 import           Servant
-import           Servant.Hateoas
+import Servant.Hateoas
+    ( HasHandler(..),
+      HasRelationLink(toRelationLink),
+      Title,
+      ToResource(..),
+      Resource(wrap, addRel),
+      MkLayers,
+      resourcifyProxy,
+      HasResourceServer(getResourceServer),
+      Resourcify )
+import Servant.Hateoas.ContentType.Collection (CollectionResource)
+import Servant.Hateoas.ContentType.HAL 
+import Data.Some.Constraint (Somes1(..))
+import qualified Data.Vector as V
 
 -- A reusable "key beside value" wrapper, à la persistent's Entity.
 data With rel a = With { related :: rel, value :: a }
@@ -27,16 +40,32 @@ data Address = Address { street :: String, city :: String }
   deriving stock (Generic, Show, Eq, Ord)
   deriving anyclass (ToJSON, ToResource res)
 
-instance Resource res => ToResource res (With UserRefs User) where
-  toResource _ ct w@(With (UserRefs uid aid _ _) _) = addRel ("self", mkSelfLink uid)
-                        . addRel ("address", mkAddrLink aid)
-                        . addRel ("friends", mkFriendsLink uid)
-                        . addRel ("close-friends", mkCloseFriendsLink uid)
-                        $ wrap w
+data EmbeddedList a = EmbeddedList [HALResource a]
+
+instance ToJSON a => ToJSON (EmbeddedList a) where
+  toJSON (EmbeddedList xs) = Array $ V.fromList $ toJSON <$> xs
+
+instance ToResource HALResource (With UserRefs User) where
+  toResource _ ct w@(With (UserRefs uid aid _ closeIds) _) = HALResource w [selfLink uid, addrLink aid, friendsLink uid, closeFriendsLink uid] [("close-friends", Some1 $ HALResource (EmbeddedList closeRes) [] [])]
     where
-      mkAddrLink = toRelationLink $ resourcifyProxy (Proxy @AddressGetOne) ct
-      mkSelfLink = toRelationLink $ resourcifyProxy (Proxy @UserGetOne) ct
-      mkFriendsLink = toRelationLink $ resourcifyProxy (Proxy @UserGetFriends) ct
+      closeUsers = filter (\(With (UserRefs u _ _ _) _) -> u `elem` closeIds) userDb
+      closeRes = (\wl@(With (UserRefs uidl aidl _ _) _) -> HALResource wl [selfLink uidl, addrLink aidl, friendsLink uidl, closeFriendsLink uidl] []) <$> closeUsers
+      addrLink         = ("address",) . toRelationLink (resourcifyProxy (Proxy @AddressGetOne) ct)
+      selfLink         = ("self",) . toRelationLink (resourcifyProxy (Proxy @UserGetOne) ct)
+      friendsLink      = ("friends",) . toRelationLink (resourcifyProxy (Proxy @UserGetFriends) ct)
+      closeFriendsLink = ("close-friends",) . toRelationLink (resourcifyProxy (Proxy @UserGetCloseFriends) ct)
+
+instance ToResource CollectionResource (With UserRefs User) where
+  toResource _ ct w@(With (UserRefs uid aid _ _) _) = 
+      addRel ("self", mkSelfLink uid)
+    . addRel ("address", mkAddrLink aid)
+    . addRel ("friends", mkFriendsLink uid)
+    . addRel ("close-friends", mkCloseFriendsLink uid)
+    $ wrap w
+    where
+      mkAddrLink         = toRelationLink $ resourcifyProxy (Proxy @AddressGetOne) ct
+      mkSelfLink         = toRelationLink $ resourcifyProxy (Proxy @UserGetOne) ct
+      mkFriendsLink      = toRelationLink $ resourcifyProxy (Proxy @UserGetFriends) ct
       mkCloseFriendsLink = toRelationLink $ resourcifyProxy (Proxy @UserGetCloseFriends) ct
 
 type Api = UserApi :<|> AddressApi

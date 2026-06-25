@@ -74,6 +74,8 @@ test-suite servant-hateoas-test
                          base >= 4.17.2 && < 5
                        , servant-hateoas
                        , aeson
+                       , constrained-some
                        , servant-server
                        , hspec
                        , hspec-wai
+                       , vector
