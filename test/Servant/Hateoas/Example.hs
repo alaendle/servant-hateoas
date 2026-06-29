@@ -20,6 +20,7 @@ import Servant.Hateoas.ContentType.Collection (CollectionResource)
 import Servant.Hateoas.ContentType.HAL 
 import Data.Some.Constraint (Somes1(..))
 import qualified Data.Vector as V
+import Control.Monad.IO.Class
 
 -- A reusable "key beside value" wrapper, à la persistent's Entity.
 data With rel a = With { related :: rel, value :: a }
@@ -72,7 +73,7 @@ type Api = UserApi :<|> AddressApi
 
 type UserApi = UserGetOne :<|> UserGetAll :<|> UserGetQuery :<|> UserGetFriends :<|> UserGetCloseFriends
 type UserGetOne     = "api" :> "user" :> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] (With UserRefs User)
-type UserGetAll     = "api" :> "user" :> Get '[JSON] [With UserRefs User]
+type UserGetAll     = "api" :> "user" :> Header "X-Forwarded-Prefix" String :> Get '[JSON] [With UserRefs User]
 type UserGetQuery   = "api" :> "user" :> "query" :> QueryParam "name" String :> QueryParam "income" Double :>Get '[JSON] (With UserRefs User)
 type UserGetFriends = "api" :> "user" :> Capture "id" Int :> "friends" :> Get '[JSON] [With UserRefs User]
 type UserGetCloseFriends = "api" :> "user" :> Capture "id" Int :> "close-friends" :> Get '[JSON] [With UserRefs User]
@@ -91,8 +92,10 @@ instance Monad m => HasHandler m UserGetOne where
     (user:_) -> user
     _        -> error "User not found"
 
-instance Monad m => HasHandler m UserGetAll where
-  getHandler _ _ = return userDb
+instance MonadIO m => HasHandler m UserGetAll where
+  getHandler _ _ = \mHeader -> do
+    liftIO $ print mHeader
+    pure userDb
 
 instance Monad m => HasHandler m UserGetQuery where
   getHandler _ _ = \mName mIncome -> return $ case filter (\(With _ (User n i)) -> maybe True (== n) mName && maybe True (== i) mIncome) userDb of
@@ -118,10 +121,10 @@ layerServer :: Server (Resourcify (MkLayers Api) (HAL JSON))
 layerServer = getResourceServer (Proxy @Handler) (Proxy @(HAL JSON)) (Proxy @(MkLayers Api))
 
 layerApp :: Application
-layerApp = serve (Proxy @((Resourcify (MkLayers Api)) (HAL JSON))) layerServer
+layerApp = serve (Proxy @(Resourcify (MkLayers Api) (HAL JSON))) layerServer
 
 apiServer :: Server (Resourcify Api (HAL JSON))
 apiServer = getResourceServer (Proxy @Handler) (Proxy @(HAL JSON)) (Proxy @Api)
 
 apiApp :: Application
-apiApp = serve (Proxy @((Resourcify Api) (HAL JSON))) apiServer
+apiApp = serve (Proxy @(Resourcify Api (HAL JSON))) apiServer

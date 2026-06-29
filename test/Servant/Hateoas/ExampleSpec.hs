@@ -56,7 +56,7 @@ checkNormalize :: Normalize Api :~:
   ( "api"
     :> ( "user"
       :> ( "query" :> QueryParam "name" String :> QueryParam "income" Double :> Get '[JSON] (With UserRefs User)
-        :<|> (Get '[JSON] [With UserRefs User]
+        :<|> (Header "X-Forwarded-Prefix" String :> Get '[JSON] [With UserRefs User]
         :<|> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] (With UserRefs User)
         :<|> Capture "id" Int :> ("friends" :> Get '[JSON] [With UserRefs User]
                              :<|> "close-friends" :> Get '[JSON] [With UserRefs User])))
@@ -69,7 +69,7 @@ checkNormalizeSymify :: Normalize (Symify Api) :~:
   ( Sym "api"
     :> ( Sym "user"
       :> ( Sym "query" :> QueryParam "name" String :> QueryParam "income" Double :> Get '[JSON] (With UserRefs User)
-        :<|> (Get '[JSON] [With UserRefs User]
+        :<|> (Header "X-Forwarded-Prefix" String :>Get '[JSON] [With UserRefs User]
         :<|> Title "The user with the given id" :> Capture "id" Int :> Get '[JSON] (With UserRefs User)
         :<|> Capture "id" Int :> (Sym "friends" :> Get '[JSON] [With UserRefs User]
                              :<|> Sym "close-friends" :> Get '[JSON] [With UserRefs User])))
