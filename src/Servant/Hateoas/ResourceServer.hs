@@ -1,3 +1,5 @@
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Servant.Hateoas.ResourceServer
@@ -58,6 +60,20 @@ class HasResourceServer api m ct where
 instance {-# OVERLAPPING #-} (HasResourceServer a m ct, HasResourceServer b m ct) => HasResourceServer (a :<|> b) m ct where
   getResourceServer m ct _ = getResourceServer m ct (Proxy @a) :<|> getResourceServer m ct (Proxy @b)
 
+-- | A typeclass to automatically align the arity of the link generator with the server handler.
+-- If the server expects an argument (like a Header) that the link generator drops, we pad it with `\_ ->`.
+class AlignLink server link padded | server link -> padded where
+  alignLink :: Proxy server -> link -> padded
+
+instance {-# OVERLAPPABLE #-} (padded ~ link) => AlignLink server link padded where
+  alignLink _ l = l
+
+instance {-# OVERLAPS #-} AlignLink sB link pB => AlignLink (arg -> sB) link (arg -> pB) where
+  alignLink _ l = \_ -> alignLink (Proxy @sB) l
+
+instance {-# OVERLAPPING #-} AlignLink sB lB pB => AlignLink (arg -> sB) (arg -> lB) (arg -> pB) where
+  alignLink _ l = \x -> alignLink (Proxy @sB) (l x)
+
 -- | Adds a self-link to the resource.
 instance {-# OVERLAPPABLE #-}
   ( server ~ ServerT api m
@@ -68,13 +84,15 @@ instance {-# OVERLAPPABLE #-}
   , BuildResource ct a
   , HasHandler m api
   , HasRelationLink (Resourcify api ct)
-  , PolyvariadicComp2 server mkLink (IsFun server)
-  , Return2 server mkLink (IsFun server) ~ (m a, RelationLink)
-  , Replace2 server mkLink (m (MkResource ct (ResponsifyPayload ct a))) (IsFun mkLink) ~ ResourcifyServer server ct m
+  , AlignLink server mkLink paddedLink
+  , PolyvariadicComp2 server paddedLink (IsFun server)
+  , Return2 server paddedLink (IsFun server) ~ (m a, RelationLink)
+  , Replace2 server paddedLink (m (MkResource ct (ResponsifyPayload ct a))) (IsFun server) ~ ResourcifyServer server ct m
   ) => HasResourceServer (api :: Type) m ct where
-  getResourceServer m _ api = pcomp2 (\(ma, self) -> addSelfRel self . buildResource (Proxy @ct) <$> ma) (getHandler m api) mkSelf
+  getResourceServer m _ api = pcomp2 (\(ma, self) -> addSelfRel self . buildResource (Proxy @ct) <$> ma) (getHandler m api) paddedSelf
     where
       mkSelf = toRelationLink (Proxy @(Resourcify api ct))
+      paddedSelf = alignLink (Proxy @server) mkSelf
 
 instance
   ( api ~ LayerApi l
